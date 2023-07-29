@@ -2,4 +2,8 @@
   "clientId": "client_id",
   "secret": "secret",
   "token": "token"
+  "secureConnectBundlePath": "data/secure-connect-bptf-ws.zip",
+  "keyspace": "items",
+  "tableName": "items",
+  "websocketURL": "wss://ws.backpack.tf/events"
 }
