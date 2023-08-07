@@ -1,24 +1,27 @@
 from bptf_websocket import BptfWebSocket
 from json import load
 from asyncio import run
+from sku.parser import Sku
 
 
 async def main():
+    Sku.update_autobot_pricelist()
     with open('config.json', 'r') as f:
         config = load(f)
 
-    WEBSOCKET_URL = config['websocketURL']
-    CLIENT_ID = config['clientId']
-    CLIENT_SECRET = config['secret']
-    SECURE_CONNECT_BUNDLE = config['secureConnectBundlePath']
-    KEYSPACE = config['keyspace']
-    TABLE_NAME = config['tableName']
+    WEBSOCKET_URL = config['websocket_url']
+    CONNECTION_STRING = config['connection_string']
+    DATABASE_NAME = config['database_name']
+    COLLECTION_NAME = config['collection_name']
+    PRINT_EVENTS = config['print_events']
 
-    bptf = BptfWebSocket(CLIENT_ID, CLIENT_SECRET, SECURE_CONNECT_BUNDLE, KEYSPACE, TABLE_NAME, WEBSOCKET_URL)
+    bptf = BptfWebSocket(CONNECTION_STRING, DATABASE_NAME, COLLECTION_NAME, WEBSOCKET_URL, PRINT_EVENTS)
 
     try:
+        print("Starting websocket...") if PRINT_EVENTS else None
         await bptf.parse_websocket_events()
     finally:
+        print("Closing connection...") if PRINT_EVENTS else None
         await bptf.close_connection()
 
 

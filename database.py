@@ -1,60 +1,45 @@
-from cassandra.cluster import Cluster
-from cassandra.auth import PlainTextAuthProvider
-from cassandra.query import SimpleStatement
-from json import loads, dumps
+from pymongo import MongoClient
 
 
-class CassandraManager:
-    def __init__(self, client_id, client_secret, secure_connect_bundle_path, keyspace, table_name):
-        cloud_config = {
-            'secure_connect_bundle': secure_connect_bundle_path
+class MongoDBManager:
+    def __init__(self, connection_string, database_name, collection_name):
+        self.client = MongoClient(connection_string)
+        self.database = self.client[database_name]
+        self.collection = self.database[collection_name]
+        self.create_index()
+
+    def create_index(self) -> None:
+        # Creating an index on the 'sku' field for faster queries
+        self.collection.create_index([('sku', 1)], unique=True)
+
+    def insert_listing(self, sku, listing_id, listing_data) -> None:
+        listing = {
+            'sku': sku,
+            'listings': {
+                str(listing_id): listing_data
+            }
         }
-        auth_provider = PlainTextAuthProvider(client_id, client_secret)
-        self.cluster = Cluster(cloud=cloud_config, auth_provider=auth_provider, control_connection_timeout=30,
-                               connect_timeout=30)
-        self.session = self.cluster.connect(keyspace)
-        self.keyspace = keyspace
-        self.table_name = table_name
-        self.create_table()
+        self.collection.update_one({'sku': sku}, {'$set': listing}, upsert=True)
 
-    def create_table(self) -> None:
-        query = f"""
-            CREATE TABLE IF NOT EXISTS {self.keyspace}.{self.table_name} (
-                sku text PRIMARY KEY,
-                listings map<text, text>
-            )
-        """
-        self.session.execute(query)
+    def get_listing(self, sku, listing_id) -> dict or None:
+        result = self.collection.find_one({'sku': sku}, {'listings': {str(listing_id): 1}})
+        if result and 'listings' in result:
+            return result['listings'].get(str(listing_id))
+        return None
 
-    async def insert_listing(self, sku, listing_id, listing_data) -> None:
-        query = f"""
-            UPDATE {self.keyspace}.{self.table_name}
-            SET listings[%s] = %s
-            WHERE sku = %s
-        """
+    def delete_listing(self, sku, listing_id) -> None:
+        self.collection.update_one({'sku': sku}, {'$unset': {f'listings.{str(listing_id)}': 1}})
 
-        statement = SimpleStatement(query)
-        return self.session.execute_async(statement, (str(listing_id), dumps(listing_data), str(sku)))
-
-    async def get_listing(self, sku, listing_id) -> dict | None:
-        query = f"SELECT listings['{str(listing_id)}'] FROM {self.keyspace}.{self.table_name} WHERE sku = '{str(sku)}'"
-        result = self.session.execute(query)
-        try:
-            return loads(result.one()[0]) if result else None
-        except TypeError:
-            return None
-
-    async def delete_listing(self, sku, listing_id) -> None:
-        listing_id_set = {str(listing_id)}
-
-        query = f"""
-            UPDATE {self.keyspace}.{self.table_name}
-            SET listings = listings - %s
-            WHERE sku = %s
-        """
-        statement = SimpleStatement(query)
-        return self.session.execute_async(statement, (listing_id_set, str(sku)))
+    def delete_old_listings(self, time) -> None:
+        query = {
+            'listings.time': {'$lt': time}
+        }
+        update = {
+            '$unset': {'listings.$[element]': 1},
+            '$pull': {'listings': None}
+        }
+        array_filters = [{'element.time': {'$lt': time}}]
+        self.collection.update_many(query, update, array_filters=array_filters)
 
     def close_connection(self) -> None:
-        self.session.shutdown()
-        self.cluster.shutdown()
+        self.client.close()

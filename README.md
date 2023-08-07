@@ -2,11 +2,11 @@
 
 backpack.tf-ws-service is a script designed to connect to backpack.tf's websocket service and gather data. 
 
-This data is then stored in a Cassandra database.
+This data is then stored in a MongoDB database.
 
 ## Requirements
 + Python 3.10+
-+ A running Cassandra database (I used DataStax Astra's)
++ MongoDB
 
 ## Installation
 
@@ -22,7 +22,7 @@ This data is then stored in a Cassandra database.
     ```
 + Update the json file with your specific settings and preferences
 
-+ Run the main.py script
++ Run the main.py script (ensure you have a mongodb instance running too):
     ```bash
     python main.py
     ```
