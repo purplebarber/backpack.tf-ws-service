@@ -2,7 +2,6 @@ import websockets
 from json import loads
 from database import MongoDBManager
 from sku.parser import Sku
-from time import time
 
 
 class BptfWebSocket:
@@ -48,9 +47,9 @@ class BptfWebSocket:
         }
 
     async def parse_websocket_events(self) -> None:
-        async with websockets.connect(self.ws_url, ping_interval=None, extra_headers={"batch-test": True}) as websocket:
-            print("Connected to websocket...") if self.print_events else None
+        async with websockets.connect(self.ws_url, ping_interval=None) as websocket:
             try:
+                print("Connected to websocket...") if self.print_events else None
                 async for message in websocket:
                     json_data = loads(message)
                     try:
@@ -84,9 +83,8 @@ class BptfWebSocket:
 
         listing_id = payload.get("id")
         item_name = payload.get("item").get("name")
-
         if item_name not in self.name_dict:
-            sku = Sku.sku_to_name(item_name)
+            sku = Sku.name_to_sku(item_name)
             self.name_dict[item_name] = sku
         else:
             sku = self.name_dict[item_name]
