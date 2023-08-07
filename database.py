@@ -1,4 +1,5 @@
 from pymongo import MongoClient
+from time import time
 
 
 class MongoDBManager:
@@ -30,16 +31,19 @@ class MongoDBManager:
     def delete_listing(self, sku, listing_id) -> None:
         self.collection.update_one({'sku': sku}, {'$unset': {f'listings.{str(listing_id)}': 1}})
 
-    def delete_old_listings(self, time) -> None:
-        query = {
-            'listings.time': {'$lt': time}
-        }
-        update = {
-            '$unset': {'listings.$[element]': 1},
-            '$pull': {'listings': None}
-        }
-        array_filters = [{'element.time': {'$lt': time}}]
-        self.collection.update_many(query, update, array_filters=array_filters)
+    def delete_old_listings(self, time_to_delete: int) -> None:
+        for document in self.collection.find():
+            listings = document.get('listings', dict())
+            updated_listings = dict()
+            for listing_key, listing_data in listings.items():
+                listed_at = listing_data.get('listed_at', 0)
+                if time() - int(listed_at) < time_to_delete:
+                    updated_listings[listing_key] = listing_data
+
+            self.collection.update_one(
+                {'_id': document['_id']},
+                {'$set': {'listings': updated_listings}}
+            )
 
     def close_connection(self) -> None:
         self.client.close()
