@@ -47,6 +47,7 @@ class BptfWebSocket:
         }
 
     async def parse_websocket_events(self) -> None:
+        self.mongodb.delete_old_listings(60 * 60 * 24 * 2)
         async with websockets.connect(self.ws_url, ping_interval=None) as websocket:
             try:
                 print("Connected to websocket...") if self.print_events else None
