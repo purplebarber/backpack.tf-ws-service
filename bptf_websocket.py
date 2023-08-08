@@ -1,16 +1,17 @@
 import websockets
 from json import loads
-from database import MongoDBManager
+from database import AsyncMongoDBManager
 from sku.parser import Sku
 
 
 class BptfWebSocket:
     def __init__(self, connection_string, database_name, collection_name, ws_uri, print_events=False):
-        self.mongodb = MongoDBManager(connection_string, database_name, collection_name)
+        self.mongodb = AsyncMongoDBManager(connection_string, database_name, collection_name)
         self.ws_url = ws_uri
         self.name_dict = dict()
         self.print_events = print_events
         self.do_we_delete_old_listings = True
+        self.insert_buffer = dict()
 
     async def print_event(self, listing_event, payload) -> None:
         if not self.print_events:
@@ -50,8 +51,9 @@ class BptfWebSocket:
     async def parse_websocket_events(self) -> None:
         if self.do_we_delete_old_listings is True:
             print("Deleting old listings...") if self.print_events else None
-            self.mongodb.delete_old_listings(60 * 60 * 24 * 2)
+            await self.mongodb.delete_old_listings(60 * 60 * 24 * 2)
             self.do_we_delete_old_listings = False
+            await self.mongodb.create_index()
 
         async with websockets.connect(self.ws_url, ping_interval=None) as websocket:
             try:
@@ -100,13 +102,22 @@ class BptfWebSocket:
             if not parsed_payload:
                 return dict()
             await self.print_event(listing_event, parsed_payload)
-            self.mongodb.insert_listing(sku, listing_id, parsed_payload)
+
+            if sku not in self.insert_buffer:
+                self.insert_buffer[sku] = dict()
+
+            self.insert_buffer[sku][listing_id] = parsed_payload
+
+            if len(self.insert_buffer) >= 30:
+                print("Inserting 30ish listings...") if self.print_events else None
+                await self.mongodb.insert_listings(self.insert_buffer)
+                self.insert_buffer = dict()
 
         elif listing_event == "listing-delete":
-            self.mongodb.delete_listing(sku, listing_id)
+            await self.mongodb.delete_listing(sku, listing_id)
             await self.print_event(listing_event, payload)
 
         return dict()
 
     async def close_connection(self) -> None:
-        self.mongodb.close_connection()
+        await self.mongodb.close_connection()
