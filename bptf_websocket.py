@@ -33,7 +33,7 @@ class BptfWebSocket:
         intent = payload.get("intent")
         user_agent = payload.get("userAgent")
 
-        if not (buy_out_only or trade_offers_preferred):
+        if not (buy_out_only and trade_offers_preferred):
             print(f"Invalid listing: {payload}") if self.print_events else None
             return dict()
 
