@@ -11,13 +11,12 @@ class BptfWebSocket:
         self.name_dict = dict()
         self.print_events = print_events
         self.do_we_delete_old_listings = True
-        self.insert_buffer = dict()
 
-    async def print_event(self, listing_event, payload) -> None:
+    async def print_event(self, sku: str, listing_event: str, payload: dict) -> None:
         if not self.print_events:
             return
 
-        print(f"Event: {listing_event}")
+        print(f"Event: {listing_event} for {sku}")
         print(f"Payload: {payload}")
 
     async def reformat_event(self, payload: dict) -> dict:
@@ -103,21 +102,12 @@ class BptfWebSocket:
             parsed_payload = await self.reformat_event(payload)
             if not parsed_payload:
                 return dict()
-            await self.print_event(listing_event, parsed_payload)
-
-            if sku not in self.insert_buffer:
-                self.insert_buffer[sku] = dict()
-
-            self.insert_buffer[sku][listing_id] = parsed_payload
-
-            if len(self.insert_buffer) >= 30:
-                print("Inserting 30ish listings...") if self.print_events else None
-                await self.mongodb.insert_listings(self.insert_buffer)
-                self.insert_buffer = dict()
+            await self.mongodb.insert_listing(sku, listing_id, parsed_payload)
+            await self.print_event(sku, listing_event, parsed_payload)
 
         elif listing_event == "listing-delete":
             await self.mongodb.delete_listing(sku, listing_id)
-            await self.print_event(listing_event, payload)
+            await self.print_event(sku, listing_event, payload)
 
         return dict()
 

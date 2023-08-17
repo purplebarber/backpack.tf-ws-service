@@ -20,27 +20,6 @@ class AsyncMongoDBManager:
         }
         await self.collection.update_one({'sku': sku}, update_query, upsert=True)
 
-    async def insert_listings(self, listings_data) -> None:
-        bulk_operations = list()
-
-        for sku, listings in listings_data.items():
-            for listing_id, listing_data in listings.items():
-                update_query = {
-                    '$set': {f'listings.{str(listing_id)}': listing_data},
-                    '$setOnInsert': {'sku': sku}
-                }
-
-                bulk_operations.append(
-                    UpdateOne(
-                        {'sku': sku},
-                        update_query,
-                        upsert=True
-                    )
-                )
-
-        if bulk_operations:
-            await self.collection.bulk_write(bulk_operations)
-
     async def get_listing(self, sku, listing_id) -> dict or None:
         result = await self.collection.find_one({'sku': sku}, {'listings': {str(listing_id): 1}})
         if result and 'listings' in result:
