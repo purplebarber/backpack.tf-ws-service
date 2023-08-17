@@ -1,6 +1,6 @@
 import websockets
 from json import loads
-from database import AsyncMongoDBManager
+from src.database import AsyncMongoDBManager
 from sku.parser import Sku
 
 
@@ -33,10 +33,6 @@ class BptfWebSocket:
         intent = payload.get("intent")
         user_agent = payload.get("userAgent")
 
-        if not (buy_out_only and trade_offers_preferred):
-            print(f"Invalid listing: {payload}") if self.print_events else None
-            return dict()
-
         return {
             "steam_id": steam_id,
             "currencies": currencies,
@@ -55,17 +51,23 @@ class BptfWebSocket:
             self.do_we_delete_old_listings = False
             await self.mongodb.create_index()
 
-        async with websockets.connect(self.ws_url, ping_interval=None) as websocket:
+        async with websockets.connect(self.ws_url, ping_interval=None, extra_headers={'batch-test': True},
+                                      max_size=10000000) as websocket:
             try:
                 print("Connected to websocket...") if self.print_events else None
+                event_count = 0
                 async for message in websocket:
                     json_data = loads(message)
                     try:
                         if isinstance(json_data, list):
                             for event_data in json_data:
                                 await self.handle_event(event_data)  # handles the new event format
+                                event_count += 1
+                                print(f"Handled {event_count} events...") if self.print_events else None
                         else:
                             await self.handle_event(json_data)  # old event-per-frame message format
+                            event_count += 1
+                            print(f"Handled {event_count} events...") if self.print_events else None
 
                     except Exception as e:
                         print(e)

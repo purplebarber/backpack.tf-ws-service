@@ -1,4 +1,4 @@
-from bptf_websocket import BptfWebSocket
+from src.bptf_websocket import BptfWebSocket
 from json import load
 from asyncio import run
 from sku.parser import Sku
