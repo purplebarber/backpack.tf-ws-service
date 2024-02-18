@@ -11,27 +11,27 @@ class AsyncMongoDBManager:
         self.collection = self.database[collection_name]
 
     async def create_index(self) -> None:
-        # Creating an index on the 'sku' field for faster queries
-        await self.collection.create_index([('sku', 1)], unique=True)
+        # Creating an index on the 'name' field for faster queries
+        await self.collection.create_index([('name', 1)], unique=True)
 
-    async def insert_listing(self, sku, intent, steamid, listing_data) -> None:
+    async def insert_listing(self, name, intent, steamid, listing_data) -> None:
         # First, delete any existing listing for the given steamid and intent
-        await self.delete_listing(sku, intent, steamid)
+        await self.delete_listing(name, intent, steamid)
         # Then, insert the new listing
         update_query = {
             '$set': {f'listings.{str(intent)}.{str(steamid)}': listing_data},
-            '$setOnInsert': {'sku': sku}
+            '$setOnInsert': {'name': name}
         }
-        await self.collection.update_one({'sku': sku}, update_query, upsert=True)
+        await self.collection.update_one({'name': name}, update_query, upsert=True)
 
-    async def get_listing(self, sku, intent, steamid) -> dict or None:
-        result = await self.collection.find_one({'sku': sku}, {'listings': {str(intent): {str(steamid): 1}}})
+    async def get_listing(self, name, intent, steamid) -> dict or None:
+        result = await self.collection.find_one({'name': name}, {'listings': {str(intent): {str(steamid): 1}}})
         if result and 'listings' in result:
             return result['listings'].get(str(intent), {}).get(str(steamid))
         return None
 
-    async def delete_listing(self, sku, intent, steamid) -> None:
-        await self.collection.update_one({'sku': sku}, {'$unset': {f'listings.{str(intent)}.{str(steamid)}': 1}})
+    async def delete_listing(self, name, intent, steamid) -> None:
+        await self.collection.update_one({'name': name}, {'$unset': {f'listings.{str(intent)}.{str(steamid)}': 1}})
 
     async def delete_old_listings(self, time_to_delete: int) -> None:
         current_time = time()

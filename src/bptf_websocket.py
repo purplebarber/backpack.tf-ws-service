@@ -2,7 +2,6 @@ import websockets
 from json import loads
 from asyncio import Future, create_task, gather
 from src.database import AsyncMongoDBManager
-from sku.parser import Sku
 
 
 class BptfWebSocket:
@@ -12,7 +11,6 @@ class BptfWebSocket:
         self.name_dict = dict()
         self.print_events = print_events
         self.do_we_delete_old_listings = True
-        self.sku = Sku()
 
     async def print_event(self, thing_to_print) -> None:
         if not self.print_events:
@@ -49,6 +47,9 @@ class BptfWebSocket:
         # Call delete_old_listings when start_websocket starts
         create_task(self.mongodb.delete_old_listings(86_400))
 
+        # Create index on name
+        await self.mongodb.create_index()
+
         while True:
             try:
                 async with websockets.connect(
@@ -83,25 +84,24 @@ class BptfWebSocket:
             return
 
         item_name = data.get("item", dict()).get("name")
-        sku = self.sku.name_to_sku(item_name)
 
         # Depending on the event type, perform different actions
         match event:
             # If the event is a listing update
             case "listing-update":
                 # Process the listing
-                await self.process_listing(data, sku)
+                await self.process_listing(data, item_name)
 
             # If the event is a listing deletion
             case "listing-delete":
                 # Process the deletion
-                await self.process_deletion(sku, data.get("intent"), data.get("steamid"))
+                await self.process_deletion(item_name, data.get("intent"), data.get("steamid"))
 
             # If the event is neither a listing update nor a deletion, exit the function
             case _:
                 return
 
-    async def process_listing(self, data: dict, sku: str) -> None:
+    async def process_listing(self, data: dict, item_name: str) -> None:
         # Reformat the data
         listing_data = await self.reformat_event(data)
         # If the data is empty, exit the function
@@ -109,14 +109,15 @@ class BptfWebSocket:
             return
 
         # Insert the listing into the database
-        await self.mongodb.insert_listing(sku, listing_data.get("intent"), listing_data.get("steam_id"), listing_data)
-        await self.print_event(f"listing-update for {sku} with intent {listing_data.get('intent')}"
+        await self.mongodb.insert_listing(item_name, listing_data.get("intent"),
+                                          listing_data.get("steam_id"), listing_data)
+        await self.print_event(f"listing-update for {item_name} with intent {listing_data.get('intent')}"
                                f" and steamid {listing_data.get('steam_id')}")
 
-    async def process_deletion(self, sku: str, intent: str, steamid: str) -> None:
+    async def process_deletion(self, item_name: str, intent: str, steamid: str) -> None:
         # Delete the listing from the database
-        await self.mongodb.delete_listing(sku, intent, steamid)
-        await self.print_event(f"listing-delete for {sku} with intent {intent} and steamid {steamid}")
+        await self.mongodb.delete_listing(item_name, intent, steamid)
+        await self.print_event(f"listing-delete for {item_name} with intent {intent} and steamid {steamid}")
 
     async def close_connection(self) -> None:
         await self.mongodb.close_connection()
