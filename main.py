@@ -1,11 +1,9 @@
 from src.bptf_websocket import BptfWebSocket
 from json import load
 from asyncio import run
-from sku.parser import Sku
 
 
 async def main():
-    Sku.update_autobot_pricelist()
     with open('config.json', 'r') as f:
         config = load(f)
 
@@ -19,7 +17,8 @@ async def main():
 
     try:
         print("Starting websocket...") if PRINT_EVENTS else None
-        await bptf.parse_websocket_events()
+        await bptf.start_websocket(WEBSOCKET_URL)
+
     finally:
         print("Closing connection...") if PRINT_EVENTS else None
         await bptf.close_connection()

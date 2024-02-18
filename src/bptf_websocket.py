@@ -1,5 +1,6 @@
 import websockets
 from json import loads
+from asyncio import Future, create_task, gather
 from src.database import AsyncMongoDBManager
 from sku.parser import Sku
 
@@ -11,15 +12,16 @@ class BptfWebSocket:
         self.name_dict = dict()
         self.print_events = print_events
         self.do_we_delete_old_listings = True
+        self.sku = Sku()
 
-    async def print_event(self, sku: str, listing_event: str, payload: dict) -> None:
+    async def print_event(self, thing_to_print) -> None:
         if not self.print_events:
             return
 
-        print(f"Event: {listing_event} for {sku}")
-        print(f"Payload: {payload}")
+        print(thing_to_print)
 
-    async def reformat_event(self, payload: dict) -> dict:
+    @staticmethod
+    async def reformat_event(payload: dict) -> dict:
         if not payload:
             return dict()
 
@@ -43,73 +45,78 @@ class BptfWebSocket:
             "user_agent": user_agent
         }
 
-    async def parse_websocket_events(self) -> None:
-        if self.do_we_delete_old_listings is True:
-            print("Deleting old listings...") if self.print_events else None
-            await self.mongodb.delete_old_listings(60 * 60 * 24 * 2)
-            self.do_we_delete_old_listings = False
-            await self.mongodb.create_index()
+    async def start_websocket(self, websocket_url: str) -> None:
+        # Call delete_old_listings when start_websocket starts
+        create_task(self.mongodb.delete_old_listings(86_400))
 
-        async with websockets.connect(self.ws_url, ping_interval=None, extra_headers={'batch-test': True},
-                                      max_size=10000000) as websocket:
+        while True:
             try:
-                print("Connected to websocket...") if self.print_events else None
-                event_count = 0
-                async for message in websocket:
-                    json_data = loads(message)
-                    try:
-                        if isinstance(json_data, list):
-                            for event_data in json_data:
-                                await self.handle_event(event_data)  # handles the new event format
-                                event_count += 1
-                                print(f"Handled {event_count} events...") if self.print_events else None
-                        else:
-                            await self.handle_event(json_data)  # old event-per-frame message format
-                            event_count += 1
-                            print(f"Handled {event_count} events...") if self.print_events else None
+                async with websockets.connect(
+                        websocket_url,
+                        max_size=None,
+                        ping_interval=60,
+                        ping_timeout=120
+                ) as websocket:
+                    await self.handle_websocket(websocket)
+                    await Future()  # keep the connection open
+            except (websockets.ConnectionClosedError, websockets.ConnectionClosedOK, websockets.ConnectionClosed) as e:
+                await self.print_event(f"Connection closed: {e}, trying to reconnect")
+                continue
 
-                    except Exception as e:
-                        print(e)
-                        pass
+            except KeyboardInterrupt:
+                break
 
-            except websockets.ConnectionClosedError:
-                print("Connection closed, reconnecting...")
-                return await self.parse_websocket_events()
+    async def handle_websocket(self, websocket):
+        await self.print_event("Connected to backpack.tf websocket!")
+        async for message in websocket:
+            json_data = loads(message)
 
-            finally:
-                pass
+            if isinstance(json_data, list):
+                tasks = [self.handle_event(thingy.get("payload"), thingy.get("event")) for thingy in json_data]
+                await gather(*tasks)
+            else:
+                await self.handle_event(json_data.get("payload"), json_data.get("event"))
 
-    async def handle_event(self, json_data: dict) -> dict:
-        payload = json_data.get("payload", dict())
+    async def handle_event(self, data: dict, event: str) -> None:
+        # If no data is provided, exit the function
+        if not data:
+            return
 
-        if payload.get("appid", 0) != 440:
-            return dict()
+        item_name = data.get("item", dict()).get("name")
+        sku = self.sku.name_to_sku(item_name)
 
-        listing_event = json_data.get("event")
+        # Depending on the event type, perform different actions
+        match event:
+            # If the event is a listing update
+            case "listing-update":
+                # Process the listing
+                await self.process_listing(data, sku)
 
-        if listing_event != "listing-delete" and listing_event != "listing-update":
-            return dict()
+            # If the event is a listing deletion
+            case "listing-delete":
+                # Process the deletion
+                await self.process_deletion(sku, data.get("intent"), data.get("steamid"))
 
-        listing_id = payload.get("id")
-        item_name = payload.get("item").get("name")
-        if item_name not in self.name_dict:
-            sku = Sku.name_to_sku(item_name)
-            self.name_dict[item_name] = sku
-        else:
-            sku = self.name_dict[item_name]
+            # If the event is neither a listing update nor a deletion, exit the function
+            case _:
+                return
 
-        if listing_event == "listing-update":
-            parsed_payload = await self.reformat_event(payload)
-            if not parsed_payload:
-                return dict()
-            await self.mongodb.insert_listing(sku, listing_id, parsed_payload)
-            await self.print_event(sku, listing_event, parsed_payload)
+    async def process_listing(self, data: dict, sku: str) -> None:
+        # Reformat the data
+        listing_data = await self.reformat_event(data)
+        # If the data is empty, exit the function
+        if not listing_data:
+            return
 
-        elif listing_event == "listing-delete":
-            await self.mongodb.delete_listing(sku, listing_id)
-            await self.print_event(sku, listing_event, payload)
+        # Insert the listing into the database
+        await self.mongodb.insert_listing(sku, listing_data.get("intent"), listing_data.get("steam_id"), listing_data)
+        await self.print_event(f"listing-update for {sku} with intent {listing_data.get('intent')}"
+                               f" and steamid {listing_data.get('steam_id')}")
 
-        return dict()
+    async def process_deletion(self, sku: str, intent: str, steamid: str) -> None:
+        # Delete the listing from the database
+        await self.mongodb.delete_listing(sku, intent, steamid)
+        await self.print_event(f"listing-delete for {sku} with intent {intent} and steamid {steamid}")
 
     async def close_connection(self) -> None:
         await self.mongodb.close_connection()
