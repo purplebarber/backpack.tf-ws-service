@@ -50,7 +50,7 @@ class ListingDBManager:
                 UpdateOne(
                     {'name': name},
                     {
-                        '$push': {"listings": listing_data},
+                        '$addToSet': {"listings": listing_data},
                         '$setOnInsert': {'name': name}
                     },
                     upsert=True

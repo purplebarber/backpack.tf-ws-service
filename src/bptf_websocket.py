@@ -39,7 +39,7 @@ class BptfWebSocket:
         if not payload:
             return dict()
 
-        steam_id = payload.get("steamid")
+        steamid = payload.get("steamid")
         currencies = payload.get("currencies")
         buy_out_only = payload.get("buyoutOnly")
 
@@ -59,7 +59,7 @@ class BptfWebSocket:
         only_buyout = payload.get('buyout', True)
 
         return {
-            "steamid": steam_id,
+            "steamid": steamid,
             "currencies": currencies,
             "trade_offers_preferred": trade_offers_preferred,
             "buy_out_only": buy_out_only,
@@ -110,7 +110,7 @@ class BptfWebSocket:
             operations["insert"].append({
                 "name": item_name,
                 "intent": listing_data.get("intent"),
-                "steamid": listing_data.get("steam_id"),
+                "steamid": listing_data.get("steamid"),
                 "listing_data": listing_data
             })
 
@@ -121,9 +121,9 @@ class BptfWebSocket:
 
     async def refresh_snapshots(self) -> None:
         await self.print_event("Refreshing snapshots...")
-        self.snapshot_times = await self.mongodb.get_all_snapshot_times()
 
         while True:
+            self.snapshot_times = await self.mongodb.get_all_snapshot_times()
             oldest_items = sorted(self.snapshot_times.items(), key=lambda x: x[1])[:10]
             oldest_items = [item[0] for item in oldest_items]
 
@@ -230,7 +230,7 @@ class BptfWebSocket:
                     listings_to_update["insert"].append({
                         "name": item_name,
                         "intent": listing_data.get("intent"),
-                        "steamid": listing_data.get("steam_id"),
+                        "steamid": listing_data.get("steamid"),
                         "listing_data": listing_data
                     })
 
@@ -255,9 +255,9 @@ class BptfWebSocket:
 
         # Insert the listing into the database
         await self.mongodb.insert_listing(item_name, listing_data.get("intent"),
-                                          listing_data.get("steam_id"), listing_data)
+                                          listing_data.get("steamid"), listing_data)
         await self.print_event(f"listing-update for {item_name} with intent {listing_data.get('intent')}"
-                               f" and steamid {listing_data.get('steam_id')}")
+                               f" and steamid {listing_data.get('steamid')}")
 
     async def process_deletion(self, item_name: str, intent: str, steamid: str) -> None:
         # Delete the listing from the database
