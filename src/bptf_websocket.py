@@ -59,7 +59,7 @@ class BptfWebSocket:
         only_buyout = payload.get('buyout', True)
 
         return {
-            "steam_id": steam_id,
+            "steamid": steam_id,
             "currencies": currencies,
             "trade_offers_preferred": trade_offers_preferred,
             "buy_out_only": buy_out_only,
@@ -143,8 +143,10 @@ class BptfWebSocket:
                 await self.print_event(f"Refreshed snapshot for {item}")
                 await sleep(1)
 
+            await sleep(1)
+
     async def start_websocket(self, websocket_url: str) -> None:
-        await self.mongodb.delete_old_listings(60 * 60 * 24 * 2)  # 2 days
+        await self.mongodb.delete_old_listings(172800 + time())  # 2 days
         create_task(self.refresh_snapshots())
 
         # Create index on name
