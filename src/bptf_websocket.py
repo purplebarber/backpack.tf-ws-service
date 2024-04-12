@@ -169,13 +169,19 @@ class BptfWebSocket:
 
     async def handle_websocket(self, websocket):
         await self.print_event("Connected to backpack.tf websocket!")
+        listing_count = 0
+
         async for message in websocket:
+            await self.print_event(f"Received {listing_count} events")
+
             json_data = loads(message)
 
             if isinstance(json_data, list):
                 create_task(self.handle_list_events(json_data))
+                listing_count += len(json_data)
             else:
                 create_task(self.handle_event(json_data, json_data.get("event")))
+                listing_count += 1
 
     async def handle_event(self, data: dict, event: str) -> None:
         # If no data is provided, exit the function
