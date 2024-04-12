@@ -1,62 +1,114 @@
 import motor.motor_asyncio
 from pymongo import UpdateOne
-from time import time
 from pymongo.server_api import ServerApi
 
 
-class AsyncMongoDBManager:
-    def __init__(self, connection_string, database_name, collection_name):
-        self.client = motor.motor_asyncio.AsyncIOMotorClient(connection_string, server_api=ServerApi('1'))
+class ListingDBManager:
+    def __init__(self, mongo_uri: str, database_name: str, collection_name: str):
+        self.client = motor.motor_asyncio.AsyncIOMotorClient(mongo_uri, server_api=ServerApi('1'))
         self.database = self.client[database_name]
         self.collection = self.database[collection_name]
 
     async def create_index(self) -> None:
-        # Creating an index on the 'name' field for faster queries
         await self.collection.create_index([('name', 1)], unique=True)
 
-    async def insert_listing(self, name, intent, steamid, listing_data) -> None:
-        # First, delete any existing listing for the given steamid and intent
+    async def insert_listing(self, name: str, intent: str, steamid: str, listing_data: dict) -> None:
         await self.delete_listing(name, intent, steamid)
-        # Then, insert the new listing
         update_query = {
-            '$set': {f'listings.{str(intent)}.{str(steamid)}': listing_data},
+            '$push': {"listings": listing_data},
             '$setOnInsert': {'name': name}
         }
         await self.collection.update_one({'name': name}, update_query, upsert=True)
 
-    async def get_listing(self, name, intent, steamid) -> dict or None:
-        result = await self.collection.find_one({'name': name}, {'listings': {str(intent): {str(steamid): 1}}})
-        if result and 'listings' in result:
-            return result['listings'].get(str(intent), {}).get(str(steamid))
-        return None
+    async def delete_listing(self, name: str, intent: str, steamid: str) -> None:
+        await self.collection.update_one(
+            {"name": name},
+            {"$pull": {"listings": {"steamid": steamid, "intent": intent}}}
+        )  # Remove the listing from the document, if it exists
 
-    async def delete_listing(self, name, intent, steamid) -> None:
-        await self.collection.update_one({'name': name}, {'$unset': {f'listings.{str(intent)}.{str(steamid)}': 1}})
+    async def update_many(self, listings_to_update: dict) -> None:
+        insert_listings = listings_to_update.get("insert", [])
+        delete_listings = listings_to_update.get("delete", [])
 
-    async def delete_old_listings(self, time_to_delete: int) -> None:
-        current_time = time()
-        bulk_operations = list()
-        async for document in self.collection.find({'listings.listed_at': {'$lt': current_time - time_to_delete}}):
-            listings = document.get('listings', dict())
-            updated_listings = dict()
-            for intent in listings:
-                for steamid in listings[intent]:
-                    listing_data = listings[intent][steamid]
-                    listed_at = listing_data.get('listed_at', 0)
-                    if current_time - int(listed_at) < time_to_delete:
-                        if intent not in updated_listings:
-                            updated_listings[intent] = {}
-                        updated_listings[intent][steamid] = listing_data
+        delete_bulk = list()
+        insert_bulk = list()
 
-            bulk_operations.append(
+        for operation in insert_listings:
+            name = operation["name"]
+            intent = operation["intent"]
+            steamid = operation["steamid"]
+            listing_data = operation["listing_data"]
+
+            delete_bulk.append(
                 UpdateOne(
-                    {'_id': document['_id']},
-                    {'$set': {'listings': updated_listings}}
+                    {"name": name},
+                    {"$pull": {"listings": {"steamid": steamid, "intent": intent}}}
                 )
             )
 
-        if bulk_operations:
-            await self.collection.bulk_write(bulk_operations)
+            insert_bulk.append(
+                UpdateOne(
+                    {'name': name},
+                    {
+                        '$push': {"listings": listing_data},
+                        '$setOnInsert': {'name': name}
+                    },
+                    upsert=True
+                )
+            )
+
+        for operation in delete_listings:
+            name = operation["name"]
+            intent = operation["intent"]
+            steamid = operation["steamid"]
+
+            delete_bulk.append(
+                UpdateOne(
+                    {"name": name},
+                    {"$pull": {"listings": {"steamid": steamid, "intent": intent}}}
+                )
+            )
+
+        await self.collection.bulk_write(delete_bulk) if delete_bulk else None
+        await self.collection.bulk_write(insert_bulk) if insert_bulk else None
+
+    async def update_snapshot_time(self, name: str, snapshot_time: float) -> None:
+        await self.collection.update_one(
+            {"name": name},
+            {"$set": {"snapshot_time": snapshot_time}}
+        )
+
+    async def get_snapshot_time(self, name: str) -> float:
+        snapshot_time = await self.collection.find_one(
+            {"name": name},
+            {"snapshot_time": 1}
+        )
+        return snapshot_time.get("snapshot_time") if snapshot_time else 0
+
+    async def get_all_snapshot_times(self) -> dict:
+        cursor = self.collection.find({}, {"_id": 0, "name": 1, "snapshot_time": 1})
+        snapshot_times = {}
+        async for document in cursor:
+            snapshot_times[document["name"]] = document.get("snapshot_time", 0)
+        return snapshot_times
+
+    async def delete_old_listings(self, max_time: float) -> None:
+        await self.collection.update_many(
+            {},
+            [
+                {"$set": {
+                    "listings": {
+                        "$filter": {
+                            "input": "$listings",
+                            "cond": {"$gte": ["$$this.updated", max_time]}
+                        }
+                    }
+                }}
+            ]
+        )
+
+    async def delete_item(self, name: str) -> None:
+        await self.collection.delete_one({"name": name})
 
     async def close_connection(self) -> None:
         self.client.close()

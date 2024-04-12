@@ -1,4 +1,4 @@
 pymongo
 websockets~=11.0.3
-tf2-sku-to-name
 motor
+httpx

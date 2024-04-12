@@ -1,16 +1,32 @@
 import websockets
 from json import loads
-from asyncio import Future, create_task, gather
-from src.database import AsyncMongoDBManager
+from asyncio import Future, create_task, sleep
+from src.database import ListingDBManager
+from httpx import AsyncClient
+from time import time
 
 
 class BptfWebSocket:
-    def __init__(self, connection_string, database_name, collection_name, ws_uri, print_events=False):
-        self.mongodb = AsyncMongoDBManager(connection_string, database_name, collection_name)
+    def __init__(self, mongo_uri: str,
+                 database_name: str = "bptf",
+                 collection_name: str = "listings",
+                 ws_uri: str = "wss://ws-backpack.tf/ws",
+                 print_events: bool = False,
+                 bptf_token: str = None,
+                 prioritized_items: list[str] = None):
+
+        if not mongo_uri:
+            raise ValueError("Mongo URI is required")
+
+        self.mongodb = ListingDBManager(mongo_uri, database_name, collection_name)
         self.ws_url = ws_uri
         self.name_dict = dict()
         self.print_events = print_events
         self.do_we_delete_old_listings = True
+        self.snapshot_times = dict()
+        self.bptf_token = bptf_token
+        self.prioritized_items = set(prioritized_items) if prioritized_items else set()
+        self.http_client = AsyncClient()
 
     async def print_event(self, thing_to_print) -> None:
         if not self.print_events:
@@ -25,12 +41,22 @@ class BptfWebSocket:
 
         steam_id = payload.get("steamid")
         currencies = payload.get("currencies")
-        trade_offers_preferred = payload.get("tradeOffersPreferred")
         buy_out_only = payload.get("buyoutOnly")
-        listed_at = payload.get("listedAt")
-        bumped_at = payload.get("bumpedAt")
+
+        if payload.get('bumpedAt'):  # websocket
+            listed_at = payload.get("listedAt")
+            bumped_at = payload.get("bumpedAt")
+            trade_offers_preferred = payload.get("tradeOffersPreferred")
+        else:  # snapshots
+            listed_at = payload.get("timestamp")
+            bumped_at = payload.get("bump")
+            trade_offers_preferred = payload.get("offers")
+
         intent = payload.get("intent")
         user_agent = payload.get("userAgent")
+        item = payload.get('item')
+        details = payload.get('details')
+        only_buyout = payload.get('buyout', True)
 
         return {
             "steam_id": steam_id,
@@ -40,12 +66,86 @@ class BptfWebSocket:
             "listed_at": listed_at,
             "bumped_at": bumped_at,
             "intent": intent,
-            "user_agent": user_agent
+            "user_agent": user_agent,
+            "item": item,
+            "details": details,
+            "only_buyout": only_buyout
         }
 
+    async def update_snapshot(self, item_name: str) -> None:
+        snap_request = await self.http_client.get(
+            "https://backpack.tf/api/classifieds/listings/snapshot",
+            params={
+                "token": self.bptf_token,
+                "sku": item_name,
+                "appid": "440"
+            }
+        )
+
+        if snap_request.status_code == 429:
+            await sleep(5)
+            return
+
+        if snap_request.status_code != 200:
+            return
+
+        snapshot = snap_request.json()
+
+        if not snapshot:
+            return
+
+        listings = snapshot.get("listings")
+        snapshot_time = snapshot.get("createdAt")
+
+        if not listings or not snapshot_time:
+            return
+
+        operations = {"insert": list(), "delete": list()}
+
+        for listing in listings:
+            listing_data = await self.reformat_event(listing)
+            if not listing_data:
+                continue
+
+            operations["insert"].append({
+                "name": item_name,
+                "intent": listing_data.get("intent"),
+                "steamid": listing_data.get("steam_id"),
+                "listing_data": listing_data
+            })
+
+        await self.mongodb.delete_item(item_name)
+        await self.mongodb.update_many(operations)
+        await self.mongodb.update_snapshot_time(item_name, snapshot_time)
+        self.snapshot_times[item_name] = snapshot_time
+
+    async def refresh_snapshots(self) -> None:
+        await self.print_event("Refreshing snapshots...")
+        self.snapshot_times = await self.mongodb.get_all_snapshot_times()
+
+        while True:
+            oldest_items = sorted(self.snapshot_times.items(), key=lambda x: x[1])[:10]
+            oldest_items = [item[0] for item in oldest_items]
+
+            oldest_prioritized_items = sorted(
+                ((k, v) for k, v in self.snapshot_times.items() if k in self.prioritized_items.copy()),
+                key=lambda x: x[1]
+            )[:10]
+            oldest_prioritized_items = [item[0] for item in oldest_prioritized_items][:10]
+
+            for item in oldest_items:
+                await self.update_snapshot(item)
+                await self.print_event(f"Refreshed snapshot for {item}")
+                await sleep(1)
+
+            for item in oldest_prioritized_items:
+                await self.update_snapshot(item)
+                await self.print_event(f"Refreshed snapshot for {item}")
+                await sleep(1)
+
     async def start_websocket(self, websocket_url: str) -> None:
-        # Call delete_old_listings when start_websocket starts
-        create_task(self.mongodb.delete_old_listings(86_400))
+        await self.mongodb.delete_old_listings(60 * 60 * 24 * 2)  # 2 days
+        create_task(self.refresh_snapshots())
 
         # Create index on name
         await self.mongodb.create_index()
@@ -73,10 +173,9 @@ class BptfWebSocket:
             json_data = loads(message)
 
             if isinstance(json_data, list):
-                tasks = [self.handle_event(thingy.get("payload"), thingy.get("event")) for thingy in json_data]
-                await gather(*tasks)
+                create_task(self.handle_list_events(json_data))
             else:
-                await self.handle_event(json_data.get("payload"), json_data.get("event"))
+                create_task(self.handle_event(json_data, json_data.get("event")))
 
     async def handle_event(self, data: dict, event: str) -> None:
         # If no data is provided, exit the function
@@ -100,6 +199,44 @@ class BptfWebSocket:
             # If the event is neither a listing update nor a deletion, exit the function
             case _:
                 return
+
+    async def handle_list_events(self, events: list) -> None:
+        listings_to_update = {"insert": list(), "delete": list()}
+
+        for event in events:
+            data = event.get("payload", dict())
+            item_name = data.get("item", dict()).get("name")
+
+            if not item_name:
+                continue
+
+            if not data:
+                continue
+
+            match event.get("event"):
+                case "listing-update":
+                    listing_data = await self.reformat_event(data)
+                    if not listing_data:
+                        continue
+
+                    listings_to_update["insert"].append({
+                        "name": item_name,
+                        "intent": listing_data.get("intent"),
+                        "steamid": listing_data.get("steam_id"),
+                        "listing_data": listing_data
+                    })
+
+                case "listing-delete":
+                    listings_to_update["delete"].append({
+                        "name": item_name,
+                        "intent": data.get("intent"),
+                        "steamid": data.get("steamid")
+                    })
+
+                case _:
+                    continue
+
+        await self.mongodb.update_many(listings_to_update)
 
     async def process_listing(self, data: dict, item_name: str) -> None:
         # Reformat the data

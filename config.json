@@ -1,7 +1,12 @@
 {
-  "connection_string": "mongodb://localhost:27017/backpacktf",
+  "mongo_uri": "mongodb://localhost:27017",
   "database_name": "backpacktf",
-  "collection_name": "backpacktf",
+  "collection_name": "listings",
+  "bptf_token": "YOUR_BPTF_TOKEN",
   "websocket_url": "wss://ws.backpack.tf/events",
-  "print_events": true
+  "print_events": true,
+  "prioritized_items": [
+    "Mann Co. Supply Crate Key"
+  ]
+
 }
