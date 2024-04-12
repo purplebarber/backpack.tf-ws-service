@@ -8,12 +8,20 @@ async def main():
         config = load(f)
 
     WEBSOCKET_URL = config['websocket_url']
-    CONNECTION_STRING = config['connection_string']
+    MONGO_URI = config['mongo_uri']
     DATABASE_NAME = config['database_name']
     COLLECTION_NAME = config['collection_name']
     PRINT_EVENTS = config['print_events']
+    BPTF_TOKEN = config['bptf_token']
+    PRIO_ITEMS = config['prioritized_items']
 
-    bptf = BptfWebSocket(CONNECTION_STRING, DATABASE_NAME, COLLECTION_NAME, WEBSOCKET_URL, PRINT_EVENTS)
+    bptf = BptfWebSocket(MONGO_URI,
+                         DATABASE_NAME,
+                         COLLECTION_NAME,
+                         WEBSOCKET_URL,
+                         PRINT_EVENTS,
+                         BPTF_TOKEN,
+                         PRIO_ITEMS)
 
     try:
         print("Starting websocket...") if PRINT_EVENTS else None
